@@ -41,6 +41,11 @@ jobs:
         run: |
           & $env:BLENDER --background --python scripts/build_vehicle.py
 
+      - name: Add and validate vehicle physics
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/repair_physics.py
+
       - name: Finalize native YFT and YTD
         shell: pwsh
         run: |
@@ -56,8 +61,14 @@ jobs:
         shell: pwsh
         run: |
           if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs.yft')) { throw 'kodiaqcs.yft was not produced' }
-          if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft')) { Copy-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft' }
+          if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft')) { throw 'kodiaqcs_hi.yft was not produced' }
           if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs.ytd')) { throw 'kodiaqcs.ytd was not produced' }
+          if (!(Test-Path 'build_output\cwxml_repaired\kodiaqcs.yft.xml')) { throw 'repaired CWXML YFT missing' }
+          $xml = Get-Content 'build_output\cwxml_repaired\kodiaqcs.yft.xml' -Raw
+          if ($xml -notmatch '<Physics>') { throw 'YFT has no Physics section' }
+          if ($xml -notmatch '<LOD1>') { throw 'YFT has no Physics LOD1' }
+          if ($xml -notmatch '<Groups>') { throw 'YFT has no physics groups' }
+          if ($xml -notmatch '<Children>') { throw 'YFT has no physics children' }
           $yft=(Get-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft').Length
           $ytd=(Get-Item 'build_output\kodiaq_cs\stream\kodiaqcs.ytd').Length
           if ($yft -lt 10000) { throw 'YFT is unexpectedly small' }
