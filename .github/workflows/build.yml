@@ -9,6 +9,8 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      CI: '1'
     steps:
       - uses: actions/checkout@v4
 
@@ -24,8 +26,8 @@ jobs:
       - name: Download Sollumz
         shell: pwsh
         run: |
-          git clone --depth 1 https://github.com/Sollumz/Sollumz.git Sollumz-src
-          Compress-Archive -Path Sollumz-src\* -DestinationPath sollumz.zip
+          git clone --depth 1 https://github.com/Sollumz/Sollumz.git Sollumz
+          Compress-Archive -Path Sollumz -DestinationPath sollumz.zip
 
       - name: Install Sollumz and dependencies
         shell: pwsh
@@ -41,7 +43,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          Get-ChildItem -Recurse build_output | Format-Table FullName, Length
+          if (Test-Path build_output) { Get-ChildItem -Recurse build_output | Format-Table FullName, Length }
 
       - name: Validate native FiveM files
         shell: pwsh
