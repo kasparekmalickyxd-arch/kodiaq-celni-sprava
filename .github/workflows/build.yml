@@ -51,6 +51,11 @@ jobs:
         run: |
           & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/finalize_native.py
 
+      - name: Native YFT roundtrip validation
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts/validate_native.py
+
       - name: Show build output
         if: always()
         shell: pwsh
@@ -64,11 +69,12 @@ jobs:
           if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft')) { throw 'kodiaqcs_hi.yft was not produced' }
           if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs.ytd')) { throw 'kodiaqcs.ytd was not produced' }
           if (!(Test-Path 'build_output\cwxml_repaired\kodiaqcs.yft.xml')) { throw 'repaired CWXML YFT missing' }
-          $xml = Get-Content 'build_output\cwxml_repaired\kodiaqcs.yft.xml' -Raw
-          if ($xml -notmatch '<Physics>') { throw 'YFT has no Physics section' }
-          if ($xml -notmatch '<LOD1>') { throw 'YFT has no Physics LOD1' }
-          if ($xml -notmatch '<Groups>') { throw 'YFT has no physics groups' }
-          if ($xml -notmatch '<Children>') { throw 'YFT has no physics children' }
+          if (!(Test-Path 'build_output\native_roundtrip\kodiaqcs.yft.xml')) { throw 'native roundtrip CWXML missing' }
+          $xml = Get-Content 'build_output\native_roundtrip\kodiaqcs.yft.xml' -Raw
+          if ($xml -notmatch '<Physics>') { throw 'Native YFT has no Physics section after roundtrip' }
+          if ($xml -notmatch '<LOD1>') { throw 'Native YFT has no Physics LOD1 after roundtrip' }
+          if ($xml -notmatch '<Groups>') { throw 'Native YFT has no physics groups after roundtrip' }
+          if ($xml -notmatch '<Children>') { throw 'Native YFT has no physics children after roundtrip' }
           $yft=(Get-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft').Length
           $ytd=(Get-Item 'build_output\kodiaq_cs\stream\kodiaqcs.ytd').Length
           if ($yft -lt 10000) { throw 'YFT is unexpectedly small' }
