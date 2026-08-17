@@ -36,10 +36,15 @@ jobs:
         run: |
           & $env:BLENDER --background --python scripts/install_sollumz.py
 
-      - name: Build vehicle and export YFT/YTD
+      - name: Build vehicle
         shell: pwsh
         run: |
           & $env:BLENDER --background --python scripts/build_vehicle.py
+
+      - name: Finalize native YFT and YTD
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/finalize_native.py
 
       - name: Show build output
         if: always()
@@ -53,6 +58,10 @@ jobs:
           if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs.yft')) { throw 'kodiaqcs.yft was not produced' }
           if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft')) { Copy-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft' }
           if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs.ytd')) { throw 'kodiaqcs.ytd was not produced' }
+          $yft=(Get-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft').Length
+          $ytd=(Get-Item 'build_output\kodiaq_cs\stream\kodiaqcs.ytd').Length
+          if ($yft -lt 10000) { throw 'YFT is unexpectedly small' }
+          if ($ytd -lt 100) { throw 'YTD is unexpectedly small' }
 
       - name: Package FiveM resource
         shell: pwsh
