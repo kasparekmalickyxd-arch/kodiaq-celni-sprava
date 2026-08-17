@@ -1,0 +1,64 @@
+name: Build FiveM Kodiaq
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Blender 4.2 LTS
+        shell: pwsh
+        run: |
+          $url = 'https://download.blender.org/release/Blender4.2/blender-4.2.9-windows-x64.zip'
+          Invoke-WebRequest -Uri $url -OutFile blender.zip
+          Expand-Archive blender.zip -DestinationPath .
+          $dir = Get-ChildItem -Directory | Where-Object { $_.Name -like 'blender-4.2.*-windows-x64' } | Select-Object -First 1
+          echo "BLENDER=$($dir.FullName)\blender.exe" >> $env:GITHUB_ENV
+
+      - name: Download Sollumz
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/Sollumz/Sollumz.git Sollumz-src
+          Compress-Archive -Path Sollumz-src\* -DestinationPath sollumz.zip
+
+      - name: Install Sollumz and dependencies
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts/install_sollumz.py
+
+      - name: Build vehicle and export YFT/YTD
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts/build_vehicle.py
+
+      - name: Show build output
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse build_output | Format-Table FullName, Length
+
+      - name: Validate native FiveM files
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs.yft')) { throw 'kodiaqcs.yft was not produced' }
+          if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft')) { Copy-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft' }
+          if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs.ytd')) { throw 'kodiaqcs.ytd was not produced' }
+
+      - name: Package FiveM resource
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_READY.zip -Force
+
+      - name: Upload build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodiaq-cs-build
+          path: build_output/
+          if-no-files-found: warn
