@@ -7,6 +7,8 @@ on:
     paths:
       - 'scripts/inspect_warehouse_glb.py'
       - '.github/workflows/warehouse-inspect.yml'
+  pull_request:
+    branches: [ main ]
 
 jobs:
   inspect:
