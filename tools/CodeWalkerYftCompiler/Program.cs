@@ -21,7 +21,20 @@ Directory.CreateDirectory(Path.GetDirectoryName(output)!);
 RpfManager.IsGen9 = false;
 
 var xml = File.ReadAllText(input, Encoding.UTF8);
-var yft = XmlYft.GetYft(xml, Path.GetDirectoryName(input)!);
+var inputDir = Path.GetDirectoryName(input)!;
+
+// Sollumz CWXML stores embedded DDS files in a sibling subdirectory named
+// after the fragment (for example cwxml_final/kodiaqcs/v4_diffuse.dds), while
+// CodeWalker expects the texture folder to be supplied explicitly.
+var fileName = Path.GetFileName(input);
+var fragmentName = fileName.EndsWith(".yft.xml", StringComparison.OrdinalIgnoreCase)
+    ? fileName[..^8]
+    : Path.GetFileNameWithoutExtension(fileName);
+var nestedTextureDir = Path.Combine(inputDir, fragmentName);
+var textureDir = Directory.Exists(nestedTextureDir) ? nestedTextureDir : inputDir;
+Console.WriteLine($"Texture input folder: {textureDir}");
+
+var yft = XmlYft.GetYft(xml, textureDir);
 if (yft?.Fragment == null)
 {
     Console.Error.WriteLine("CodeWalker failed to create a fragment from XML.");
