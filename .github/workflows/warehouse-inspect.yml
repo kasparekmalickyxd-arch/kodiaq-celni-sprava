@@ -1,0 +1,59 @@
+name: Inspect 3D Warehouse Kodiaq
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ kodiaq-final-v6 ]
+    paths:
+      - 'scripts/inspect_warehouse_glb.py'
+      - '.github/workflows/warehouse-inspect.yml'
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch 3D Warehouse model metadata and GLB
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force source | Out-Null
+          $id='4c686761-b184-4128-9ad1-653a5e05424e'
+          $entity=Invoke-RestMethod -Uri "https://3dwarehouse.sketchup.com/warehouse/v1.0/entities/$id"
+          $entity | ConvertTo-Json -Depth 30 | Out-File -Encoding utf8 source\entity.json
+          $url=$entity.binaries.glb.contentUrl
+          if (-not $url) { throw '3D Warehouse entity has no GLB binary' }
+          Write-Host "GLB URL resolved"
+          Invoke-WebRequest -Uri $url -OutFile source\warehouse_kodiaq.glb
+          $len=(Get-Item source\warehouse_kodiaq.glb).Length
+          if ($len -lt 10000) { throw "Downloaded GLB is suspiciously small: $len" }
+          Write-Host "Downloaded GLB bytes=$len"
+
+      - name: Download Blender 4.2 LTS
+        shell: pwsh
+        run: |
+          $url='https://download.blender.org/release/Blender4.2/blender-4.2.9-windows-x64.zip'
+          Invoke-WebRequest -Uri $url -OutFile blender.zip
+          Expand-Archive blender.zip -DestinationPath .
+          $dir=Get-ChildItem -Directory | Where-Object { $_.Name -like 'blender-4.2.*-windows-x64' } | Select-Object -First 1
+          echo "BLENDER=$($dir.FullName)\blender.exe" >> $env:GITHUB_ENV
+
+      - name: Inspect and render downloaded model
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts\inspect_warehouse_glb.py
+
+      - name: Show inspection JSON
+        shell: pwsh
+        run: Get-Content build_output\warehouse_inspect\inspect.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: warehouse-kodiaq-inspect
+          path: |
+            source/entity.json
+            source/warehouse_kodiaq.glb
+            build_output/warehouse_inspect/
+          if-no-files-found: warn
