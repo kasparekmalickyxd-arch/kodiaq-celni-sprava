@@ -6,6 +6,6 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../CodeWalker/CodeWalker.Core/CodeWalker.Core.csproj" />
+    <ProjectReference Include="../../CodeWalker/CodeWalker.Core/CodeWalker.Core.csproj" />
   </ItemGroup>
 </Project>
