@@ -1,0 +1,125 @@
+name: Build Kodiaq CS Final V6
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ kodiaq-final-v6 ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CI: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Blender 4.2 LTS
+        shell: pwsh
+        run: |
+          $url = 'https://download.blender.org/release/Blender4.2/blender-4.2.9-windows-x64.zip'
+          Invoke-WebRequest -Uri $url -OutFile blender.zip
+          Expand-Archive blender.zip -DestinationPath .
+          $dir = Get-ChildItem -Directory | Where-Object { $_.Name -like 'blender-4.2.*-windows-x64' } | Select-Object -First 1
+          echo "BLENDER=$($dir.FullName)\blender.exe" >> $env:GITHUB_ENV
+
+      - name: Download Sollumz
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/Sollumz/Sollumz.git Sollumz
+          Compress-Archive -Path Sollumz -DestinationPath sollumz.zip
+
+      - name: Install Sollumz and dependencies
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts/install_sollumz.py
+
+      - name: Build refined V6 geometry
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts/build_vehicle_v6.py
+
+      - name: Render V6 QA previews
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/render_v6_preview.py
+
+      - name: Harden proven vehicle skeleton
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/harden_vehicle.py
+
+      - name: Add conservative proven physics
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/repair_physics.py
+
+      - name: Apply V6 colour-preserving GTA shaders
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/v6_materials.py
+
+      - name: Export final CodeWalker XML
+        shell: pwsh
+        run: |
+          Remove-Item build_output\cwxml_final -Recurse -Force -ErrorAction SilentlyContinue
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/export_cwxml_final.py
+
+      - name: Download CodeWalker source
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/dexyfex/CodeWalker.git CodeWalker
+
+      - name: Compile and roundtrip V6 YFT
+        shell: pwsh
+        run: |
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' -ErrorAction SilentlyContinue
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft' -ErrorAction SilentlyContinue
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs.ytd' -ErrorAction SilentlyContinue
+          dotnet run --configuration Release --project tools\CodeWalkerYftCompiler\CodeWalkerYftCompiler.csproj -- `
+            build_output\cwxml_final\kodiaqcs.yft.xml `
+            build_output\kodiaq_cs\stream\kodiaqcs.yft `
+            build_output\codewalker_roundtrip_v6\kodiaqcs.yft.xml
+
+      - name: Build V6 stable FiveM resource
+        shell: pwsh
+        run: |
+          python scripts\v6_final_resource.py
+
+      - name: Validate V6
+        shell: pwsh
+        run: |
+          $stream = 'build_output\kodiaq_cs\stream'
+          if (!(Test-Path "$stream\kodiaqcs.yft")) { throw 'kodiaqcs.yft missing' }
+          if (Test-Path "$stream\kodiaqcs_hi.yft") { throw 'V6 deliberately has no copied _hi YFT' }
+          if (Test-Path "$stream\kodiaqcs.ytd") { throw 'V6 uses embedded textures, custom YTD must not exist' }
+          $size=(Get-Item "$stream\kodiaqcs.yft").Length
+          if ($size -lt 150000) { throw "V6 YFT suspiciously small: $size" }
+          if (!(Test-Path 'build_output\V6_preview_front.png')) { throw 'front preview missing' }
+          if (!(Test-Path 'build_output\V6_preview_rear.png')) { throw 'rear preview missing' }
+          if (!(Test-Path 'build_output\V6_preview_side.png')) { throw 'side preview missing' }
+          $xml=Get-Content 'build_output\codewalker_roundtrip_v6\kodiaqcs.yft.xml' -Raw
+          if ($xml -notmatch '<Physics>') { throw 'V6 roundtrip lost Physics' }
+          if ($xml -notmatch '<Skeleton>') { throw 'V6 roundtrip lost Skeleton' }
+          if ($xml -match '<FileName>default\.sps</FileName>') { throw 'default.sps survived V6' }
+          if ($xml -notmatch '<FileName>vehicle_paint1\.sps</FileName>') { throw 'stable vehicle shader missing' }
+          $nullSamplers=[regex]::Matches($xml,'<Item name="[^"]*Sampler" type="Texture"\s*/>')
+          if ($nullSamplers.Count -gt 0) { throw "null texture samplers: $($nullSamplers.Count)" }
+          $shaderCount=([regex]::Matches($xml,'<ShaderIndex value=')).Count
+          if ($shaderCount -lt 20) { throw "too few V6 geometry shader assignments: $shaderCount" }
+          Write-Host "V6 VALIDATION PASSED yft=$size shaderAssignments=$shaderCount"
+
+      - name: Package V6 FiveM resource
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_FINAL_V6.zip -Force
+
+      - name: Upload V6 artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodiaq-cs-final-v6
+          path: build_output/
+          if-no-files-found: warn
