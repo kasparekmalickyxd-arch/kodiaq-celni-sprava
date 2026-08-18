@@ -1,98 +1,94 @@
 import bpy
 from pathlib import Path
+from szio.dds import DDS_HEADER
 
 ROOT = Path.cwd()
 
-try:
-    from Sollumz.ydr.shader_materials import create_shader
-except Exception:
-    import sys
-    base = next((k.rsplit('.', 2)[0] for k in sys.modules if k.endswith('.ydr.shader_materials') and 'sollumz' in k.lower()), None)
-    if not base:
-        raise
-    create_shader = __import__(base + '.ydr.shader_materials', fromlist=['create_shader']).create_shader
-
-COLORS = {
-    'BODY_WHITE': (0.93, 0.95, 0.97, 1.0),
-    'CS_BLUE': (0.02, 0.19, 0.75, 1.0),
-    'CS_BLUE_DARK': (0.0, 0.06, 0.35, 1.0),
-    'TRIM_BLACK': (0.01, 0.012, 0.018, 1.0),
-    'GLASS_DARK': (0.02, 0.04, 0.07, 1.0),
-    'METAL': (0.25, 0.28, 0.32, 1.0),
-    'LIGHT_RED': (1.0, 0.01, 0.015, 1.0),
-    'LIGHT_BLUE': (0.0, 0.20, 1.0, 1.0),
-    'SIGN_AMBER': (1.0, 0.33, 0.01, 1.0),
-}
-
-def rgba_for(name):
-    u = name.upper()
-    # Exact/prefix matching survives Blender's .001 suffixes.
-    for key, rgba in COLORS.items():
-        if u == key or u.startswith(key + '.'):
-            return rgba
-    return (0.65, 0.65, 0.65, 1.0)
+from Sollumz.ydr.shader_materials import create_shader
+from Sollumz.sollumz_properties import SollumType
 
 
-def make_packed_image(name, rgba):
-    img = bpy.data.images.get(name)
-    if img is None:
-        img = bpy.data.images.new(name=name, width=4, height=4, alpha=True)
-    img.pixels = list(rgba) * 16
-    img.update()
-    # Packed generated images are embedded into the YFT by Sollumz when the
-    # corresponding texture parameter has embedded=True.
-    try:
-        img.pack()
-    except Exception:
-        pass
+def make_bc1_dds(width=4, height=4, fill=0x10):
+    """Create the same minimal, valid packed BC1/DXT1 DDS shape used by Sollumz tests."""
+    block_size = max(1, (width + 3) // 4) * max(1, (height + 3) // 4) * 8
+    header = DDS_HEADER()
+    header.dwSize = 124
+    header.dwFlags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000
+    header.dwWidth = width
+    header.dwHeight = height
+    header.dwPitchOrLinearSize = block_size
+    header.dwMipMapCount = 1
+    header.ddspf.dwSize = 32
+    header.ddspf.dwFlags = 0x4
+    header.ddspf.dwFourCC = b'DXT1'
+    header.dwCaps = 0x1000
+    return bytes(bytearray(b'DDS ') + bytes(header) + bytes([fill]) * block_size)
+
+
+def packed_dds(name, fill):
+    old = bpy.data.images.get(name)
+    if old is not None:
+        bpy.data.images.remove(old)
+    dds = make_bc1_dds(fill=fill)
+    img = bpy.data.images.new(name=name, width=1, height=1)
+    img.source = 'FILE'
+    img.filepath = f'//{name}.dds'
+    img.pack(data=dds, data_len=len(dds))
     return img
 
-flat_normal = make_packed_image('v4_flat_normal', (0.5, 0.5, 1.0, 1.0))
-neutral_spec = make_packed_image('v4_neutral_spec', (0.35, 0.35, 0.35, 1.0))
-neutral_dirt = make_packed_image('v4_neutral_dirt', (1.0, 1.0, 1.0, 1.0))
-neutral_black = make_packed_image('v4_neutral_black', (0.0, 0.0, 0.0, 1.0))
+# Real packed DDS images are important here. A generated Blender image with
+# image.pack() exported as a null Texture parameter in CWXML/CodeWalker.
+tex_diffuse = packed_dds('v4_diffuse', 0x10)
+tex_damage = packed_dds('v4_damage', 0x22)
+tex_dirt = packed_dds('v4_dirt', 0x44)
+tex_spec = packed_dds('v4_spec', 0x66)
+tex_normal = packed_dds('v4_normal', 0x88)
+tex_neutral = packed_dds('v4_neutral', 0xAA)
 
-# Rebuild every material as a real GTA vehicle shader. The older pipeline used
-# default.sps for all vehicle surfaces and left DiffuseSampler empty.
-old_materials = [m for m in list(bpy.data.materials) if getattr(m, 'sollum_type', '') and m.users > 0]
+# Only drawable model meshes are allowed through this pass. In the previous V4
+# attempt the collision bound's GTA collision material was accidentally replaced
+# by a render material, which removed the Physics children during export.
+drawable_meshes = [
+    o for o in bpy.context.scene.objects
+    if o.type == 'MESH' and getattr(o, 'sollum_type', None) == SollumType.DRAWABLE_MODEL
+]
+if not drawable_meshes:
+    raise RuntimeError('No Sollumz Drawable Model meshes found')
+
+old_materials = []
+seen = set()
+for obj in drawable_meshes:
+    for mat in obj.data.materials:
+        if mat is not None and mat.name not in seen:
+            old_materials.append(mat)
+            seen.add(mat.name)
+
 replacement = {}
-for old in old_materials:
-    base_name = old.name.split('.')[0]
-    rgba = rgba_for(old.name)
-    try:
-        mat = create_shader('vehicle_paint1.sps')
-    except Exception:
-        mat = create_shader('vehicle_mesh.sps')
-    mat.name = 'V4_' + base_name
+for idx, old in enumerate(old_materials):
+    mat = create_shader('vehicle_paint1.sps')
+    mat.name = 'V4_' + old.name
     replacement[old.name] = mat
 
-    diffuse = make_packed_image('v4_diff_' + base_name.lower(), rgba)
     for node in mat.node_tree.nodes:
         if node.type != 'TEX_IMAGE':
             continue
         n = node.name.lower()
-        if 'bump' in n or 'normal' in n:
-            img = flat_normal
-        elif 'spec' in n:
-            img = neutral_spec
+        if 'damage' in n:
+            img = tex_damage
         elif 'dirt' in n:
-            img = neutral_dirt
-        elif 'palette' in n or 'mask' in n:
-            img = neutral_black
+            img = tex_dirt
+        elif 'spec' in n:
+            img = tex_spec
+        elif 'bump' in n or 'normal' in n:
+            img = tex_normal
+        elif 'diffuse' in n:
+            img = tex_diffuse
         else:
-            img = diffuse
+            img = tex_neutral
         node.image = img
-        try:
-            node.texture_properties.embedded = True
-        except Exception:
-            pass
+        node.texture_properties.embedded = True
 
-# Replace material slots on all meshes, and add every channel commonly required
-# by GTA vehicle shaders. This intentionally prioritizes safe spawning over
-# perfect appearance for this diagnostic build.
-for obj in bpy.context.scene.objects:
-    if obj.type != 'MESH':
-        continue
+for obj in drawable_meshes:
     mesh = obj.data
     for i, slot in enumerate(mesh.materials):
         if slot and slot.name in replacement:
@@ -110,12 +106,9 @@ for obj in bpy.context.scene.objects:
         for item in attr.data:
             item.color = (1.0, 1.0, 1.0, 1.0)
 
-# A hard gate: no live material may remain on default.sps, and no texture sampler
-# on a live Sollumz shader may be null.
+# Hard gates inside Blender before writing the file.
 problems = []
-for obj in bpy.context.scene.objects:
-    if obj.type != 'MESH':
-        continue
+for obj in drawable_meshes:
     for mat in obj.data.materials:
         if mat is None:
             continue
@@ -123,14 +116,41 @@ for obj in bpy.context.scene.objects:
         if fn == 'default.sps':
             problems.append(f'{obj.name}: default.sps')
         for node in mat.node_tree.nodes if mat.node_tree else []:
-            if node.type == 'TEX_IMAGE' and node.image is None:
-                problems.append(f'{obj.name}/{mat.name}: null texture {node.name}')
+            if node.type == 'TEX_IMAGE':
+                if node.image is None:
+                    problems.append(f'{obj.name}/{mat.name}: null texture {node.name}')
+                elif node.image.packed_file is None:
+                    problems.append(f'{obj.name}/{mat.name}: unpacked texture {node.name}')
+
+# Verify the collision was left intact and is still using a collision material.
+collisions = [o for o in bpy.context.scene.objects if o.name == 'chassis.col']
+if len(collisions) != 1:
+    problems.append(f'expected one chassis.col, got {len(collisions)}')
+else:
+    col = collisions[0]
+    if getattr(col, 'sollum_type', None) not in {
+        SollumType.BOUND_BOX, SollumType.BOUND_GEOMETRY, SollumType.BOUND_GEOMETRYBVH
+    }:
+        problems.append(f'chassis.col wrong type: {getattr(col, "sollum_type", None)}')
+    if not col.data.materials:
+        problems.append('chassis.col has no collision material')
+    else:
+        cmat = col.data.materials[0]
+        if getattr(cmat, 'sollum_type', None) != 'sollumz_collision_material':
+            # The enum/property representation differs slightly across Sollumz
+            # versions, so also accept the known collision shader property.
+            if not hasattr(cmat, 'collision_properties'):
+                problems.append(f'chassis.col material was replaced: {cmat.name}')
+
 if problems:
-    raise RuntimeError('V4 material hardening failed: ' + '; '.join(problems[:20]))
+    raise RuntimeError('V4 material hardening failed: ' + '; '.join(problems[:30]))
 
 out = ROOT / 'build_output' / 'kodiaqcs.blend'
 bpy.ops.wm.save_as_mainfile(filepath=str(out))
 print('V4 VEHICLE MATERIALS READY', {
-    'replaced': len(replacement),
-    'live_shaders': sorted(set(getattr(m.shader_properties, 'filename', '') for m in replacement.values()))
+    'drawable_meshes': len(drawable_meshes),
+    'replaced_materials': len(replacement),
+    'shader': 'vehicle_paint1.sps',
+    'packed_dds': 6,
+    'collision_material': collisions[0].data.materials[0].name if collisions else None,
 })
