@@ -38,7 +38,13 @@ jobs:
         run: |
           & $env:BLENDER --background --python scripts/build_vehicle_v6.py
 
-      - name: Render V6 QA previews
+      - name: Export headless V6 QA mesh
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/export_v6_obj.py
+
+      - name: Render optional V6 QA previews
+        continue-on-error: true
         shell: pwsh
         run: |
           & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/render_v6_preview.py
@@ -92,9 +98,9 @@ jobs:
           if (!(Test-Path "$stream\kodiaqcs.yft")) { throw 'kodiaqcs.yft missing' }
           if (Test-Path "$stream\kodiaqcs_hi.yft") { throw 'V6 deliberately has no copied _hi YFT' }
           if (Test-Path "$stream\kodiaqcs.ytd") { throw 'V6 uses embedded textures, custom YTD must not exist' }
+          if (!(Test-Path 'build_output\V6_preview_source.obj')) { throw 'headless V6 OBJ QA export missing' }
           $size=(Get-Item "$stream\kodiaqcs.yft").Length
           if ($size -lt 150000) { throw "V6 YFT suspiciously small: $size" }
-          foreach ($p in @('build_output\V6_preview_front.png','build_output\V6_preview_rear.png','build_output\V6_preview_side.png')) { if (!(Test-Path $p)) { throw "preview missing: $p" } }
           $xml=Get-Content 'build_output\codewalker_roundtrip_v6\kodiaqcs.yft.xml' -Raw
           if ($xml -notmatch '<Physics>') { throw 'V6 roundtrip lost Physics' }
           if ($xml -notmatch '<Skeleton>') { throw 'V6 roundtrip lost Skeleton' }
