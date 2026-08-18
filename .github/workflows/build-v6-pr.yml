@@ -70,6 +70,16 @@ jobs:
           Remove-Item build_output\cwxml_final -Recurse -Force -ErrorAction SilentlyContinue
           & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/export_cwxml_final.py
 
+      - name: Stage embedded DDS for CodeWalker
+        shell: pwsh
+        run: |
+          $ddsDir = 'build_output\cwxml_final\kodiaqcs'
+          if (!(Test-Path $ddsDir)) { throw 'Sollumz DDS folder missing' }
+          Copy-Item "$ddsDir\*.dds" 'build_output\cwxml_final\' -Force
+          $count = (Get-ChildItem 'build_output\cwxml_final\*.dds').Count
+          if ($count -lt 5) { throw "Too few DDS textures staged: $count" }
+          Write-Host "Staged $count DDS textures for CodeWalker"
+
       - name: Download CodeWalker source
         shell: pwsh
         run: |
