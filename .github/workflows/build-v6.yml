@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [ kodiaq-final-v6 ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build:
