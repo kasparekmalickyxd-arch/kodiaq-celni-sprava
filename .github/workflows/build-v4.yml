@@ -1,0 +1,126 @@
+name: Build FiveM Kodiaq Safe Spawn V4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ crashfix-v4 ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CI: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Blender 4.2 LTS
+        shell: pwsh
+        run: |
+          $url = 'https://download.blender.org/release/Blender4.2/blender-4.2.9-windows-x64.zip'
+          Invoke-WebRequest -Uri $url -OutFile blender.zip
+          Expand-Archive blender.zip -DestinationPath .
+          $dir = Get-ChildItem -Directory | Where-Object { $_.Name -like 'blender-4.2.*-windows-x64' } | Select-Object -First 1
+          echo "BLENDER=$($dir.FullName)\blender.exe" >> $env:GITHUB_ENV
+
+      - name: Download Sollumz
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/Sollumz/Sollumz.git Sollumz
+          Compress-Archive -Path Sollumz -DestinationPath sollumz.zip
+
+      - name: Install Sollumz and dependencies
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts/install_sollumz.py
+
+      - name: Build base geometry
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts/build_vehicle.py
+
+      - name: Harden skeleton
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/harden_vehicle.py
+
+      - name: Add conservative physics
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/repair_physics.py
+
+      - name: Replace default shaders with vehicle shaders
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/v4_materials.py
+
+      - name: Export final CodeWalker XML
+        shell: pwsh
+        run: |
+          Remove-Item build_output\cwxml_final -Recurse -Force -ErrorAction SilentlyContinue
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/export_cwxml_final.py
+
+      - name: Download CodeWalker source
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/dexyfex/CodeWalker.git CodeWalker
+
+      - name: Compile YFT with CodeWalker.Core
+        shell: pwsh
+        run: |
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' -ErrorAction SilentlyContinue
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft' -ErrorAction SilentlyContinue
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs.ytd' -ErrorAction SilentlyContinue
+          dotnet run --configuration Release --project tools\CodeWalkerYftCompiler\CodeWalkerYftCompiler.csproj -- `
+            build_output\cwxml_final\kodiaqcs.yft.xml `
+            build_output\kodiaq_cs\stream\kodiaqcs.yft `
+            build_output\codewalker_roundtrip_v4\kodiaqcs.yft.xml
+
+      - name: Strip emergency metadata for diagnostic spawn
+        shell: pwsh
+        run: |
+          python scripts\v4_safe_resource.py
+
+      - name: Validate V4 binary and resource
+        shell: pwsh
+        run: |
+          $stream = 'build_output\kodiaq_cs\stream'
+          if (!(Test-Path "$stream\kodiaqcs.yft")) { throw 'kodiaqcs.yft missing' }
+          if (Test-Path "$stream\kodiaqcs_hi.yft") { throw 'V4 diagnostic must not package copied _hi YFT' }
+          if (Test-Path "$stream\kodiaqcs.ytd") { throw 'V4 diagnostic must not package custom YTD' }
+          $size = (Get-Item "$stream\kodiaqcs.yft").Length
+          if ($size -lt 10000) { throw "YFT unexpectedly small: $size" }
+          foreach ($f in @('handling.meta','carcols.meta','carvariations.meta')) {
+            if (Test-Path "build_output\kodiaq_cs\data\$f") { throw "$f should not be packaged in V4" }
+          }
+          $xml = Get-Content 'build_output\codewalker_roundtrip_v4\kodiaqcs.yft.xml' -Raw
+          if ($xml -notmatch '<Physics>') { throw 'Roundtrip lost Physics' }
+          if ($xml -notmatch '<Skeleton>') { throw 'Roundtrip lost Skeleton' }
+          if ($xml -match '<FileName>default\.sps</FileName>') { throw 'default.sps survived V4 material rebuild' }
+          if ($xml -notmatch '<FileName>vehicle_(paint1|mesh)\.sps</FileName>') { throw 'No GTA vehicle shader found' }
+          $nullSamplers = [regex]::Matches($xml, '<Item name="[^"]*Sampler" type="Texture"\s*/>')
+          if ($nullSamplers.Count -gt 0) { throw "Null texture samplers survived binary roundtrip: $($nullSamplers.Count)" }
+          $shaderCount = ([regex]::Matches($xml, '<ShaderIndex value=')).Count
+          if ($shaderCount -lt 5) { throw "Too few geometry shader assignments: $shaderCount" }
+          Write-Host "V4 VALIDATION PASSED yft=$size bytes shaderAssignments=$shaderCount"
+
+      - name: Show V4 outputs
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path build_output) { Get-ChildItem -Recurse build_output | Format-Table FullName, Length }
+
+      - name: Package FiveM safe-spawn resource
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_SAFE_SPAWN_V4.zip -Force
+
+      - name: Upload V4 artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodiaq-cs-safe-spawn-v4
+          path: build_output/
+          if-no-files-found: warn
