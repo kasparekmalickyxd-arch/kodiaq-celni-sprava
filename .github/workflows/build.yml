@@ -3,14 +3,14 @@ name: Build FiveM Kodiaq
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, crashfix-v3 ]
   pull_request:
     branches: [ main ]
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       CI: '1'
     steps:
@@ -36,25 +36,73 @@ jobs:
         run: |
           & $env:BLENDER --background --python scripts/install_sollumz.py
 
-      - name: Build vehicle
+      - name: Build vehicle geometry
         shell: pwsh
         run: |
           & $env:BLENDER --background --python scripts/build_vehicle.py
 
-      - name: Add and validate vehicle physics
+      - name: Harden GTA vehicle skeleton
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/harden_vehicle.py
+
+      - name: Add vehicle physics
         shell: pwsh
         run: |
           & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/repair_physics.py
 
-      - name: Finalize native YFT and YTD
+      - name: Export final CodeWalker XML
         shell: pwsh
         run: |
-          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/finalize_native.py
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/export_cwxml_final.py
 
-      - name: Native YFT roundtrip validation
+      # Sollumz native/PyMateria fragment export was removed from the release path.
+      # CodeWalker XML -> binary is used instead, then the resulting binary is
+      # parsed again with CodeWalker.Core before packaging.
+      - name: Download CodeWalker source
         shell: pwsh
         run: |
-          & $env:BLENDER --background --python scripts/validate_native.py
+          git clone --depth 1 https://github.com/dexyfex/CodeWalker.git CodeWalker
+
+      - name: Compile YFT with CodeWalker.Core
+        shell: pwsh
+        run: |
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' -ErrorAction SilentlyContinue
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft' -ErrorAction SilentlyContinue
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs.ytd' -ErrorAction SilentlyContinue
+          dotnet run --configuration Release --project tools\CodeWalkerYftCompiler\CodeWalkerYftCompiler.csproj -- `
+            build_output\cwxml_final\kodiaqcs.yft.xml `
+            build_output\kodiaq_cs\stream\kodiaqcs.yft `
+            build_output\codewalker_roundtrip\kodiaqcs.yft.xml
+          Copy-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft' -Force
+
+      - name: Harden FiveM metadata
+        shell: pwsh
+        run: |
+          $v = Get-Content 'build_output\kodiaq_cs\data\vehicles.meta' -Raw
+          $v = $v.Replace('<txdName>kodiaqcs</txdName>', '<txdName>vehshare</txdName>')
+          $v = $v.Replace('FLAG_EXTRAS_REQUIRE ', '')
+          Set-Content 'build_output\kodiaq_cs\data\vehicles.meta' $v -Encoding UTF8
+
+      - name: Validate compiled vehicle
+        shell: pwsh
+        run: |
+          $stream = 'build_output\kodiaq_cs\stream'
+          if (!(Test-Path "$stream\kodiaqcs.yft")) { throw 'kodiaqcs.yft missing' }
+          if (!(Test-Path "$stream\kodiaqcs_hi.yft")) { throw 'kodiaqcs_hi.yft missing' }
+          if (Test-Path "$stream\kodiaqcs.ytd") { throw 'Unsafe empty custom YTD should not be packaged' }
+          $base = (Get-Item "$stream\kodiaqcs.yft").Length
+          $hi = (Get-Item "$stream\kodiaqcs_hi.yft").Length
+          if ($base -lt 10000) { throw "YFT unexpectedly small: $base" }
+          if ($base -ne $hi) { throw "Base/HI mismatch: $base vs $hi" }
+          $xml = Get-Content 'build_output\codewalker_roundtrip\kodiaqcs.yft.xml' -Raw
+          if ($xml -notmatch '<Physics>') { throw 'CodeWalker roundtrip lost Physics' }
+          if ($xml -notmatch '<Skeleton>') { throw 'CodeWalker roundtrip lost Skeleton' }
+          if ($xml -notmatch '<Name>seat_dside_f</Name>') { throw 'Driver seat bone missing after binary roundtrip' }
+          if ($xml -notmatch '<Name>extra_1</Name>') { throw 'STOP extra bone missing after binary roundtrip' }
+          if ($xml -notmatch '<Name>extra_2</Name>') { throw 'FOLLOW extra bone missing after binary roundtrip' }
+          $shaderCount = ([regex]::Matches($xml, '<ShaderIndex value=')).Count
+          if ($shaderCount -lt 5) { throw "Too few geometry shader assignments after CodeWalker roundtrip: $shaderCount" }
 
       - name: Show build output
         if: always()
@@ -62,33 +110,15 @@ jobs:
         run: |
           if (Test-Path build_output) { Get-ChildItem -Recurse build_output | Format-Table FullName, Length }
 
-      - name: Validate native FiveM files
-        shell: pwsh
-        run: |
-          if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs.yft')) { throw 'kodiaqcs.yft was not produced' }
-          if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft')) { throw 'kodiaqcs_hi.yft was not produced' }
-          if (!(Test-Path 'build_output\kodiaq_cs\stream\kodiaqcs.ytd')) { throw 'kodiaqcs.ytd was not produced' }
-          if (!(Test-Path 'build_output\cwxml_repaired\kodiaqcs.yft.xml')) { throw 'repaired CWXML YFT missing' }
-          if (!(Test-Path 'build_output\native_roundtrip\kodiaqcs.yft.xml')) { throw 'native roundtrip CWXML missing' }
-          $xml = Get-Content 'build_output\native_roundtrip\kodiaqcs.yft.xml' -Raw
-          if ($xml -notmatch '<Physics>') { throw 'Native YFT has no Physics section after roundtrip' }
-          if ($xml -notmatch '<LOD1>') { throw 'Native YFT has no Physics LOD1 after roundtrip' }
-          if ($xml -notmatch '<Groups>') { throw 'Native YFT has no physics groups after roundtrip' }
-          if ($xml -notmatch '<Children>') { throw 'Native YFT has no physics children after roundtrip' }
-          $yft=(Get-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft').Length
-          $ytd=(Get-Item 'build_output\kodiaq_cs\stream\kodiaqcs.ytd').Length
-          if ($yft -lt 10000) { throw 'YFT is unexpectedly small' }
-          if ($ytd -lt 100) { throw 'YTD is unexpectedly small' }
-
       - name: Package FiveM resource
         shell: pwsh
         run: |
-          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_READY.zip -Force
+          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_CRASHFIX_V3.zip -Force
 
       - name: Upload build artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kodiaq-cs-build
+          name: kodiaq-cs-crashfix-v3
           path: build_output/
           if-no-files-found: warn
