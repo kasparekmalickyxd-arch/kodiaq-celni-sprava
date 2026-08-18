@@ -30,12 +30,12 @@ def packed(name,rgb):
     return img
 
 PALETTE={
- 'BODY_WHITE':(242,246,250),
+ 'BODY_WHITE':(250,250,252),
  'TRIM_BLACK':(8,10,14),
- 'METAL_DARK':(30,32,36),
- 'METAL_SILVER':(165,170,178),
- 'GLASS_DARK':(16,28,40),
- 'LIGHT_WHITE':(232,242,250),
+ 'METAL_DARK':(38,41,46),
+ 'METAL_SILVER':(150,156,166),
+ 'GLASS_DARK':(18,28,38),
+ 'LIGHT_WHITE':(235,244,250),
  'LIGHT_RED':(245,12,18),
  'LIGHT_BLUE':(0,98,255),
  'BRAKE_RED':(180,5,10),
@@ -46,7 +46,10 @@ PALETTE={
 
 def role_for(name):
     u=name.upper()
-    # New custom materials first.
+    if 'RIM_NEW' in u: return 'METAL_SILVER'
+    if 'HUB_NEW' in u: return 'METAL_DARK'
+    if 'BRAKE_NEW' in u: return 'BRAKE_RED'
+    if 'TYRES_NEW' in u: return 'TRIM_BLACK'
     if 'CS_BLUE_DARK' in u: return 'CS_BLUE_DARK'
     if 'CS_BLUE' in u: return 'CS_BLUE'
     if 'SIGN_AMBER' in u: return 'SIGN_AMBER'
@@ -54,7 +57,6 @@ def role_for(name):
     if 'LIGHT_RED' in u: return 'LIGHT_RED'
     if 'BODY_WHITE' in u: return 'BODY_WHITE'
     if 'TRIM_BLACK' in u: return 'TRIM_BLACK'
-    # Warehouse source materials.
     if 'CARPAINT' in u: return 'BODY_WHITE'
     if 'WINDOWS' in u: return 'GLASS_DARK'
     if 'LIGHTS_GLASS' in u or 'LIGHTS1' in u: return 'LIGHT_WHITE'
@@ -70,7 +72,7 @@ def role_for(name):
 
 images={k:packed('wh_'+k.lower(),rgb) for k,rgb in PALETTE.items()}
 neutral=packed('wh_neutral',(245,245,245))
-spec=packed('wh_spec',(145,145,145))
+spec=packed('wh_spec',(120,120,120))
 normal=packed('wh_normal',(128,128,255))
 dirt=packed('wh_dirt',(238,238,238))
 
