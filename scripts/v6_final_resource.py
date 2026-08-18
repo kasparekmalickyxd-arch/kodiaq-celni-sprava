@@ -6,9 +6,9 @@ for p in (DATA,CLIENT,STREAM): p.mkdir(parents=True,exist_ok=True)
 (OUT/'fxmanifest.lua').write_text("""fx_version 'cerulean'
 game 'gta5'
 
-author 'Kodiaq CS V6'
-description 'Custom Kodiaq II-inspired Celni sprava vehicle - stable shader/physics path'
-version '6.0.0'
+author 'Kodiaq CS Final'
+description 'Skoda Kodiaq RS Celni sprava - Warehouse visual base, crash-safe FiveM fragment path'
+version '7.0.0'
 
 files {
  'data/vehicles.meta',
@@ -29,7 +29,7 @@ client_script 'client/controls.lua'
   <gameName>KODIAQCS</gameName><vehicleMakeName>SKODA</vehicleMakeName>
   <expressionDictName>null</expressionDictName><expressionName>null</expressionName>
   <animConvRoofDictName>null</animConvRoofDictName><animConvRoofName>null</animConvRoofName><animConvRoofWindowsAffected/>
-  <ptfxAssetName>null</ptfxAssetName><audioNameHash>LANDSTALKER</audioNameHash>
+  <ptfxAssetName>null</ptfxAssetName><audioNameHash>POLICE</audioNameHash>
   <layout>LAYOUT_STANDARD</layout><coverBoundOffsets>LANDSTALKER_COVER_OFFSET_INFO</coverBoundOffsets>
   <explosionInfo>EXPLOSION_INFO_DEFAULT</explosionInfo><scenarioLayout/>
   <cameraName>FOLLOW_SUV_CAMERA</cameraName><aimCameraName>BOX_VEHICLE_AIM_CAMERA</aimCameraName>
@@ -44,8 +44,8 @@ client_script 'client/controls.lua'
   <lodDistances content="float_array">35.0 70.0 140.0 280.0 500.0 500.0</lodDistances>
   <minSeatHeight value="0.780000"/><identicalModelSpawnDistance value="20"/><maxNumOfSameColor value="10"/>
   <defaultBodyHealth value="1000.000000"/><frequency value="100"/><swankness>SWANKNESS_4</swankness><maxNum value="10"/>
-  <flags></flags><type>VEHICLE_TYPE_CAR</type><plateType>VPT_FRONT_AND_BACK_PLATES</plateType>
-  <dashboardType>VDT_RACE</dashboardType><vehicleClass>VC_SUV</vehicleClass><wheelType>VWT_SUV</wheelType>
+  <flags>FLAG_LAW_ENFORCEMENT</flags><type>VEHICLE_TYPE_CAR</type><plateType>VPT_FRONT_AND_BACK_PLATES</plateType>
+  <dashboardType>VDT_RACE</dashboardType><vehicleClass>VC_EMERGENCY</vehicleClass><wheelType>VWT_SUV</wheelType>
   <trailers/><additionalTrailers/><drivers/><extraIncludes/><doorsWithCollisionWhenClosed/><driveableDoors/>
   <rewards/><cinematicPartCamera/><NmBraceOverrideSet/>
  </Item></InitDatas><txdRelationships/>
@@ -72,6 +72,8 @@ client_script 'client/controls.lua'
 </Item></HandlingData></CHandlingDataMgr>
 """,encoding='utf-8')
 
+# Deliberately keep the proven embedded-texture / no-custom-carcols path. Custom
+# YTD and carcols were previously implicated in unstable builds.
 for name in ('carcols.meta','carvariations.meta'):
     p=DATA/name
     if p.exists(): p.unlink()
@@ -82,6 +84,7 @@ for name in ('kodiaqcs_hi.yft','kodiaqcs.ytd'):
 (CLIENT/'controls.lua').write_text(r"""local MODEL=GetHashKey('kodiaqcs')
 local flashing=false
 local phase=false
+local sirenAudio=false
 local initialized={}
 
 local function veh()
@@ -94,8 +97,16 @@ end
 local function ex(v,n,on)
  if DoesExtraExist(v,n) then SetVehicleExtra(v,n,not on) end
 end
-local function alloff(v)
- ex(v,1,false); ex(v,2,false); ex(v,3,false); ex(v,4,false)
+local function signsOff(v) ex(v,1,false); ex(v,2,false) end
+local function lightsOff(v) ex(v,3,false); ex(v,4,false) end
+local function syncSiren(v)
+ if flashing or sirenAudio then
+  SetVehicleSiren(v,true)
+  SetVehicleHasMutedSirens(v,not sirenAudio)
+ else
+  SetVehicleSiren(v,false)
+  SetVehicleHasMutedSirens(v,true)
+ end
 end
 
 RegisterCommand('csstop',function()
@@ -108,33 +119,46 @@ RegisterCommand('csfollow',function()
 end,false)
 RegisterCommand('cssignoff',function()
  local v=veh(); if v==0 then return end
- ex(v,1,false); ex(v,2,false)
+ signsOff(v)
 end,false)
 RegisterCommand('cslights',function()
  local v=veh(); if v==0 then return end
  flashing=not flashing
- if not flashing then ex(v,3,false); ex(v,4,false) end
+ if not flashing then lightsOff(v) end
+ syncSiren(v)
+end,false)
+RegisterCommand('cssiren',function()
+ local v=veh(); if v==0 then return end
+ sirenAudio=not sirenAudio
+ syncSiren(v)
 end,false)
 RegisterCommand('csdiag',function()
- local v=veh(); if v==0 then print('[KODIAQCS V6] not in vehicle'); return end
- print(('[KODIAQCS V6] extras 1=%s 2=%s 3=%s 4=%s'):format(tostring(DoesExtraExist(v,1)),tostring(DoesExtraExist(v,2)),tostring(DoesExtraExist(v,3)),tostring(DoesExtraExist(v,4))))
+ local v=veh(); if v==0 then print('[KODIAQCS FINAL] not in vehicle'); return end
+ print(('[KODIAQCS FINAL] extras 1=%s 2=%s 3=%s 4=%s lights=%s siren=%s'):format(
+  tostring(DoesExtraExist(v,1)),tostring(DoesExtraExist(v,2)),tostring(DoesExtraExist(v,3)),tostring(DoesExtraExist(v,4)),tostring(flashing),tostring(sirenAudio)))
 end,false)
 
 CreateThread(function()
  while true do
   local v=veh()
-  if v~=0 and not initialized[v] then alloff(v); initialized[v]=true end
+  if v~=0 and not initialized[v] then
+   signsOff(v); lightsOff(v); SetVehicleSiren(v,false); SetVehicleHasMutedSirens(v,true)
+   initialized[v]=true
+  end
   if flashing and v~=0 then
-   phase=not phase; ex(v,3,phase); ex(v,4,not phase); Wait(120)
+   phase=not phase
+   ex(v,3,phase); ex(v,4,not phase)
+   Wait(115)
   else
    Wait(250)
   end
  end
 end)
 
-RegisterKeyMapping('cslights','Celni sprava: cerveno-modre moduly','keyboard','J')
+RegisterKeyMapping('cslights','Celni sprava: cerveno-modre majaky','keyboard','J')
+RegisterKeyMapping('cssiren','Celni sprava: sirena','keyboard','K')
 RegisterKeyMapping('csstop','Celni sprava: STOP','keyboard','NUMPAD1')
 RegisterKeyMapping('csfollow','Celni sprava: NASLEDUJ ME','keyboard','NUMPAD2')
 RegisterKeyMapping('cssignoff','Celni sprava: tabule vypnout','keyboard','NUMPAD3')
 """,encoding='utf-8')
-print('V6 FINAL RESOURCE READY', [str(p.relative_to(OUT)) for p in OUT.rglob('*') if p.is_file()])
+print('FINAL RESOURCE READY', [str(p.relative_to(OUT)) for p in OUT.rglob('*') if p.is_file()])
