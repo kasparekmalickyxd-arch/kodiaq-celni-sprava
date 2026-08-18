@@ -1,0 +1,158 @@
+name: Build Warehouse Kodiaq CS Final
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      CI: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch selected 3D Warehouse Kodiaq GLB
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force source | Out-Null
+          $id='4c686761-b184-4128-9ad1-653a5e05424e'
+          $entity=Invoke-RestMethod -Uri "https://3dwarehouse.sketchup.com/warehouse/v1.0/entities/$id"
+          $entity | ConvertTo-Json -Depth 30 | Out-File -Encoding utf8 source\entity.json
+          $url=$entity.binaries.glb.contentUrl
+          if (-not $url) { throw 'Selected 3D Warehouse model has no GLB binary' }
+          Invoke-WebRequest -Uri $url -OutFile source\warehouse_kodiaq.glb
+          $len=(Get-Item source\warehouse_kodiaq.glb).Length
+          if ($len -lt 1000000) { throw "Warehouse GLB suspiciously small: $len" }
+          Write-Host "Warehouse GLB downloaded: $len bytes"
+
+      - name: Download Blender 4.2 LTS
+        shell: pwsh
+        run: |
+          $url='https://download.blender.org/release/Blender4.2/blender-4.2.9-windows-x64.zip'
+          Invoke-WebRequest -Uri $url -OutFile blender.zip
+          Expand-Archive blender.zip -DestinationPath .
+          $dir=Get-ChildItem -Directory | Where-Object { $_.Name -like 'blender-4.2.*-windows-x64' } | Select-Object -First 1
+          echo "BLENDER=$($dir.FullName)\blender.exe" >> $env:GITHUB_ENV
+
+      - name: Download Sollumz
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/Sollumz/Sollumz.git Sollumz
+          Compress-Archive -Path Sollumz -DestinationPath sollumz.zip
+
+      - name: Install Sollumz and dependencies
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts\install_sollumz.py
+
+      - name: Build vehicle from Warehouse Kodiaq
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background --python scripts\build_vehicle_warehouse.py
+
+      - name: Apply final visual pass
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts\final_visual_pass.py
+
+      - name: Harden dynamic stable skeleton
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts\harden_vehicle_warehouse.py
+
+      - name: Add proven conservative physics
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts\repair_physics.py
+
+      - name: Apply crash-safe Warehouse materials
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts\warehouse_materials.py
+
+      - name: Export final CodeWalker XML
+        shell: pwsh
+        run: |
+          Remove-Item build_output\cwxml_final -Recurse -Force -ErrorAction SilentlyContinue
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts\export_cwxml_final.py
+
+      - name: Stage embedded DDS for CodeWalker
+        shell: pwsh
+        run: |
+          $ddsDir='build_output\cwxml_final\kodiaqcs'
+          if (!(Test-Path $ddsDir)) { throw 'Sollumz embedded DDS folder missing' }
+          Copy-Item "$ddsDir\*.dds" 'build_output\cwxml_final\' -Force
+          $count=(Get-ChildItem 'build_output\cwxml_final\*.dds').Count
+          if ($count -lt 8) { throw "Too few DDS textures staged: $count" }
+          Write-Host "Staged $count embedded DDS textures"
+
+      - name: Download CodeWalker source
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/dexyfex/CodeWalker.git CodeWalker
+
+      - name: Compile and roundtrip final YFT with CodeWalker.Core
+        shell: pwsh
+        run: |
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' -ErrorAction SilentlyContinue
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft' -ErrorAction SilentlyContinue
+          Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs.ytd' -ErrorAction SilentlyContinue
+          dotnet run --configuration Release --project tools\CodeWalkerYftCompiler\CodeWalkerYftCompiler.csproj -- `
+            build_output\cwxml_final\kodiaqcs.yft.xml `
+            build_output\kodiaq_cs\stream\kodiaqcs.yft `
+            build_output\codewalker_roundtrip_warehouse\kodiaqcs.yft.xml
+
+      - name: Build stable FiveM resource files
+        shell: pwsh
+        run: |
+          python scripts\v6_final_resource.py
+
+      - name: Validate final Warehouse vehicle
+        shell: pwsh
+        run: |
+          $stream='build_output\kodiaq_cs\stream'
+          if (!(Test-Path "$stream\kodiaqcs.yft")) { throw 'kodiaqcs.yft missing' }
+          if (Test-Path "$stream\kodiaqcs_hi.yft") { throw 'No copied _hi YFT allowed on stable path' }
+          if (Test-Path "$stream\kodiaqcs.ytd") { throw 'No custom YTD allowed on stable embedded-texture path' }
+          $size=(Get-Item "$stream\kodiaqcs.yft").Length
+          if ($size -lt 500000) { throw "Final Warehouse YFT suspiciously small: $size" }
+          $stats=Get-Content 'build_output\warehouse_build_stats.json' -Raw | ConvertFrom-Json
+          if ($stats.polygons -lt 50000) { throw "Warehouse geometry unexpectedly low: $($stats.polygons) polygons" }
+          $xml=Get-Content 'build_output\codewalker_roundtrip_warehouse\kodiaqcs.yft.xml' -Raw
+          if ($xml -notmatch '<Physics>') { throw 'Roundtrip lost Physics' }
+          if ($xml -notmatch '<Skeleton>') { throw 'Roundtrip lost Skeleton' }
+          foreach ($bone in @('wheel_lf','wheel_rf','wheel_lr','wheel_rr','extra_1','extra_2','extra_3','extra_4')) {
+            if ($xml -notmatch "<Name>$bone</Name>") { throw "Missing runtime bone: $bone" }
+          }
+          if ($xml -match '<FileName>default\.sps</FileName>') { throw 'default.sps survived final build' }
+          if ($xml -notmatch '<FileName>vehicle_paint1\.sps</FileName>') { throw 'Safe vehicle shader missing' }
+          $nullSamplers=[regex]::Matches($xml,'<Item name="[^"]*Sampler" type="Texture"\s*/>')
+          if ($nullSamplers.Count -gt 0) { throw "Null texture samplers survived: $($nullSamplers.Count)" }
+          $shaderCount=([regex]::Matches($xml,'<ShaderIndex value=')).Count
+          if ($shaderCount -lt 20) { throw "Too few drawable shader assignments: $shaderCount" }
+          foreach ($tex in @('wh_body_white.dds','wh_cs_blue.dds','wh_light_blue.dds','wh_light_red.dds','wh_sign_amber.dds')) {
+            if (!(Test-Path "$stream\$tex")) { throw "Missing final material texture: $tex" }
+          }
+          Write-Host "WAREHOUSE FINAL VALIDATION PASSED yft=$size polygons=$($stats.polygons) shaderAssignments=$shaderCount"
+
+      - name: Package final FiveM resource
+        shell: pwsh
+        run: |
+          @'
+          KODIAQ CS FINAL - 3D Warehouse base
+          Source visual model: 2020 Skoda Kodiaq RS Custom, 3D Warehouse model ID 4c686761-b184-4128-9ad1-653a5e05424e.
+          Final pass: white body, integrated blue body-face livery, fitted red/blue roof + grille/rear modules, rear-window STOP/NASLEDUJ ME board.
+          Commands: /cslights, /cssiren, /csstop, /csfollow, /cssignoff, /csdiag
+          Keys: J lights, K siren, NUMPAD1 STOP, NUMPAD2 NASLEDUJ ME, NUMPAD3 sign off.
+          '@ | Out-File -Encoding utf8 build_output\kodiaq_cs\README.txt
+          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_COMPLETE_FINAL.zip -Force
+
+      - name: Upload final build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodiaq-cs-complete-final
+          path: build_output/
+          if-no-files-found: warn
