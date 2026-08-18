@@ -5,7 +5,7 @@ from szio.dds import DDS_HEADER
 ROOT = Path.cwd()
 
 from Sollumz.ydr.shader_materials import create_shader
-from Sollumz.sollumz_properties import SollumType
+from Sollumz.sollumz_properties import SollumType, MaterialType
 
 
 def make_bc1_dds(width=4, height=4, fill=0x10):
@@ -64,7 +64,7 @@ for obj in drawable_meshes:
             seen.add(mat.name)
 
 replacement = {}
-for idx, old in enumerate(old_materials):
+for old in old_materials:
     mat = create_shader('vehicle_paint1.sps')
     mat.name = 'V4_' + old.name
     replacement[old.name] = mat
@@ -136,11 +136,8 @@ else:
         problems.append('chassis.col has no collision material')
     else:
         cmat = col.data.materials[0]
-        if getattr(cmat, 'sollum_type', None) != 'sollumz_collision_material':
-            # The enum/property representation differs slightly across Sollumz
-            # versions, so also accept the known collision shader property.
-            if not hasattr(cmat, 'collision_properties'):
-                problems.append(f'chassis.col material was replaced: {cmat.name}')
+        if getattr(cmat, 'sollum_type', None) != MaterialType.COLLISION:
+            problems.append(f'chassis.col material was replaced: {cmat.name} ({getattr(cmat, "sollum_type", None)})')
 
 if problems:
     raise RuntimeError('V4 material hardening failed: ' + '; '.join(problems[:30]))
