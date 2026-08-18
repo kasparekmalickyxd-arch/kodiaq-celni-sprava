@@ -1,6 +1,8 @@
-name: Validate Kodiaq CS V6 PR
+name: Validate Kodiaq CS V6 Direct
 
 on:
+  push:
+    branches: [ crashfix-v4 ]
   pull_request:
     branches: [ crashfix-v4 ]
 
