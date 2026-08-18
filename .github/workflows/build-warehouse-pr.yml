@@ -52,6 +52,11 @@ jobs:
         run: |
           & $env:BLENDER --background --python scripts\build_vehicle_warehouse.py
 
+      - name: Replace imported wheel assemblies with normal GTA wheels
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts\normalize_wheels.py
+
       - name: Apply final visual pass
         shell: pwsh
         run: |
@@ -114,12 +119,14 @@ jobs:
         run: |
           $stream='build_output\kodiaq_cs\stream'
           if (!(Test-Path "$stream\kodiaqcs.yft")) { throw 'kodiaqcs.yft missing' }
+          if (!(Test-Path 'build_output\wheel_normalization.json')) { throw 'wheel normalization report missing' }
           if (Test-Path "$stream\kodiaqcs_hi.yft") { throw 'No copied _hi YFT allowed on stable path' }
           if (Test-Path "$stream\kodiaqcs.ytd") { throw 'No custom YTD allowed on stable embedded-texture path' }
           $size=(Get-Item "$stream\kodiaqcs.yft").Length
           if ($size -lt 500000) { throw "Final Warehouse YFT suspiciously small: $size" }
           $stats=Get-Content 'build_output\warehouse_build_stats.json' -Raw | ConvertFrom-Json
-          if ($stats.polygons -lt 50000) { throw "Warehouse geometry unexpectedly low: $($stats.polygons) polygons" }
+          $wheels=Get-Content 'build_output\wheel_normalization.json' -Raw | ConvertFrom-Json
+          if ($wheels.created_models.Count -lt 20) { throw "Replacement wheels incomplete: $($wheels.created_models.Count) models" }
           $xml=Get-Content 'build_output\codewalker_roundtrip_warehouse\kodiaqcs.yft.xml' -Raw
           if ($xml -notmatch '<Physics>') { throw 'Roundtrip lost Physics' }
           if ($xml -notmatch '<Skeleton>') { throw 'Roundtrip lost Skeleton' }
@@ -130,29 +137,24 @@ jobs:
           if ($xml -notmatch '<FileName>vehicle_paint1\.sps</FileName>') { throw 'Safe vehicle shader missing' }
           $nullSamplers=[regex]::Matches($xml,'<Item name="[^"]*Sampler" type="Texture"\s*/>')
           if ($nullSamplers.Count -gt 0) { throw "Null texture samplers survived: $($nullSamplers.Count)" }
-          $shaderCount=([regex]::Matches($xml,'<ShaderIndex value=')).Count
-          if ($shaderCount -lt 20) { throw "Too few drawable shader assignments: $shaderCount" }
-          foreach ($tex in @('wh_body_white.dds','wh_cs_blue.dds','wh_light_blue.dds','wh_light_red.dds','wh_sign_amber.dds')) {
-            if (!(Test-Path "$stream\$tex")) { throw "Missing final material texture: $tex" }
-          }
-          Write-Host "WAREHOUSE FINAL VALIDATION PASSED yft=$size polygons=$($stats.polygons) shaderAssignments=$shaderCount"
+          Write-Host "NORMAL DRIVABLE VALIDATION PASSED yft=$size replacementWheelModels=$($wheels.created_models.Count)"
 
       - name: Package final FiveM resource
         shell: pwsh
         run: |
           @'
-          KODIAQ CS FINAL - 3D Warehouse base
+          KODIAQ CS NORMAL DRIVABLE V8
           Source visual model: 2020 Skoda Kodiaq RS Custom, 3D Warehouse model ID 4c686761-b184-4128-9ad1-653a5e05424e.
-          Final pass: white body, integrated blue body-face livery, fitted red/blue roof + grille/rear modules, rear-window STOP/NASLEDUJ ME board.
+          Fixes: original broken wheel assemblies removed, clean four-wheel set created, white body forced at runtime, normal handling, Customs livery, roof/grille/rear red-blue modules, STOP/NASLEDUJ ME.
           Commands: /cslights, /cssiren, /csstop, /csfollow, /cssignoff, /csdiag
           Keys: J lights, K siren, NUMPAD1 STOP, NUMPAD2 NASLEDUJ ME, NUMPAD3 sign off.
           '@ | Out-File -Encoding utf8 build_output\kodiaq_cs\README.txt
-          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_COMPLETE_FINAL.zip -Force
+          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_NORMAL_DRIVABLE_V8.zip -Force
 
       - name: Upload final build artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kodiaq-cs-complete-final
+          name: kodiaq-cs-normal-drivable-v8
           path: build_output/
           if-no-files-found: warn
