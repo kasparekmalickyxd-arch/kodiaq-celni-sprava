@@ -1,0 +1,1 @@
+Trigger PR synchronize event after V6 validation PR is ready.
