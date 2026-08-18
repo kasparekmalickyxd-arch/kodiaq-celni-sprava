@@ -1,0 +1,73 @@
+name: Build FL Customs Overlay
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CI: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pillow for livery textures
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check pillow
+
+      - name: Generate Customs livery textures
+        shell: pwsh
+        run: python scripts\make_fl_livery_textures.py
+
+      - name: Download Blender 4.2 LTS
+        shell: pwsh
+        run: |
+          $url='https://download.blender.org/release/Blender4.2/blender-4.2.9-windows-x64.zip'
+          Invoke-WebRequest -Uri $url -OutFile blender.zip
+          Expand-Archive blender.zip -DestinationPath .
+          $dir=Get-ChildItem -Directory | Where-Object { $_.Name -like 'blender-4.2.*-windows-x64' } | Select-Object -First 1
+          echo "BLENDER=$($dir.FullName)\blender.exe" >> $env:GITHUB_ENV
+
+      - name: Download Sollumz
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/Sollumz/Sollumz.git Sollumz
+          Compress-Archive -Path Sollumz -DestinationPath sollumz.zip
+
+      - name: Install Sollumz and native dependencies
+        shell: pwsh
+        run: '& $env:BLENDER --background --python scripts\install_sollumz.py'
+
+      - name: Build native FL Customs overlay YDR
+        shell: pwsh
+        run: '& $env:BLENDER --background --python scripts\build_fl_livery_overlay.py'
+
+      - name: Assemble FiveM overlay resource
+        shell: pwsh
+        run: |
+          $out='build_output\civkodiaqfl_cs_livery'
+          New-Item -ItemType Directory -Force "$out\stream" | Out-Null
+          Copy-Item fl_overlay_resource\fxmanifest.lua "$out\fxmanifest.lua"
+          Copy-Item fl_overlay_resource\client.lua "$out\client.lua"
+          Copy-Item fl_overlay_resource\README.txt "$out\README.txt"
+          Copy-Item build_output\fl_overlay_native\civkodiaqfl_cs_overlay.ydr "$out\stream\civkodiaqfl_cs_overlay.ydr"
+          $ydr=(Get-Item "$out\stream\civkodiaqfl_cs_overlay.ydr")
+          if ($ydr.Length -lt 10000) { throw "Overlay YDR suspiciously small: $($ydr.Length)" }
+          $head=[System.IO.File]::ReadAllBytes($ydr.FullName)[0..3]
+          $ascii=[System.Text.Encoding]::ASCII.GetString($head)
+          if ($ascii -ne 'RSC7') { throw "Overlay YDR is not native RSC7: $ascii" }
+          Write-Host "FL overlay native YDR OK: $($ydr.Length) bytes"
+
+      - name: Package resource
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build_output\civkodiaqfl_cs_livery\* -DestinationPath build_output\CIVKODIAQFL_CELNI_SPRAVA_LIVERY.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: civkodiaqfl-celni-sprava-livery
+          path: build_output/
+          if-no-files-found: error
