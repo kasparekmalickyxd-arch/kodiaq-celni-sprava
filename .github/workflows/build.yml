@@ -3,7 +3,7 @@ name: Build FiveM Kodiaq
 on:
   workflow_dispatch:
   push:
-    branches: [ main, crashfix-v3 ]
+    branches: [ main, crashfix-v4 ]
   pull_request:
     branches: [ main ]
 
@@ -36,35 +36,38 @@ jobs:
         run: |
           & $env:BLENDER --background --python scripts/install_sollumz.py
 
-      - name: Build vehicle geometry
+      - name: Build base geometry
         shell: pwsh
         run: |
           & $env:BLENDER --background --python scripts/build_vehicle.py
 
-      - name: Harden GTA vehicle skeleton
+      - name: Harden skeleton
         shell: pwsh
         run: |
           & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/harden_vehicle.py
 
-      - name: Add vehicle physics
+      - name: Add conservative physics
         shell: pwsh
         run: |
           & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/repair_physics.py
 
+      - name: Rebuild materials as GTA vehicle shaders
+        shell: pwsh
+        run: |
+          & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/v4_materials.py
+
       - name: Export final CodeWalker XML
         shell: pwsh
         run: |
+          Remove-Item build_output\cwxml_final -Recurse -Force -ErrorAction SilentlyContinue
           & $env:BLENDER --background build_output\kodiaqcs.blend --python scripts/export_cwxml_final.py
 
-      # Sollumz native/PyMateria fragment export was removed from the release path.
-      # CodeWalker XML -> binary is used instead, then the resulting binary is
-      # parsed again with CodeWalker.Core before packaging.
       - name: Download CodeWalker source
         shell: pwsh
         run: |
           git clone --depth 1 https://github.com/dexyfex/CodeWalker.git CodeWalker
 
-      - name: Compile YFT with CodeWalker.Core
+      - name: Compile and roundtrip YFT with CodeWalker.Core
         shell: pwsh
         run: |
           Remove-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' -ErrorAction SilentlyContinue
@@ -73,36 +76,35 @@ jobs:
           dotnet run --configuration Release --project tools\CodeWalkerYftCompiler\CodeWalkerYftCompiler.csproj -- `
             build_output\cwxml_final\kodiaqcs.yft.xml `
             build_output\kodiaq_cs\stream\kodiaqcs.yft `
-            build_output\codewalker_roundtrip\kodiaqcs.yft.xml
-          Copy-Item 'build_output\kodiaq_cs\stream\kodiaqcs.yft' 'build_output\kodiaq_cs\stream\kodiaqcs_hi.yft' -Force
+            build_output\codewalker_roundtrip_v4\kodiaqcs.yft.xml
 
-      - name: Harden FiveM metadata
+      - name: Build stripped safe-spawn resource
         shell: pwsh
         run: |
-          $v = Get-Content 'build_output\kodiaq_cs\data\vehicles.meta' -Raw
-          $v = $v.Replace('<txdName>kodiaqcs</txdName>', '<txdName>vehshare</txdName>')
-          $v = $v.Replace('FLAG_EXTRAS_REQUIRE ', '')
-          Set-Content 'build_output\kodiaq_cs\data\vehicles.meta' $v -Encoding UTF8
+          python scripts\v4_safe_resource.py
 
-      - name: Validate compiled vehicle
+      - name: Validate V4
         shell: pwsh
         run: |
           $stream = 'build_output\kodiaq_cs\stream'
           if (!(Test-Path "$stream\kodiaqcs.yft")) { throw 'kodiaqcs.yft missing' }
-          if (!(Test-Path "$stream\kodiaqcs_hi.yft")) { throw 'kodiaqcs_hi.yft missing' }
-          if (Test-Path "$stream\kodiaqcs.ytd") { throw 'Unsafe empty custom YTD should not be packaged' }
-          $base = (Get-Item "$stream\kodiaqcs.yft").Length
-          $hi = (Get-Item "$stream\kodiaqcs_hi.yft").Length
-          if ($base -lt 10000) { throw "YFT unexpectedly small: $base" }
-          if ($base -ne $hi) { throw "Base/HI mismatch: $base vs $hi" }
-          $xml = Get-Content 'build_output\codewalker_roundtrip\kodiaqcs.yft.xml' -Raw
-          if ($xml -notmatch '<Physics>') { throw 'CodeWalker roundtrip lost Physics' }
-          if ($xml -notmatch '<Skeleton>') { throw 'CodeWalker roundtrip lost Skeleton' }
-          if ($xml -notmatch '<Name>seat_dside_f</Name>') { throw 'Driver seat bone missing after binary roundtrip' }
-          if ($xml -notmatch '<Name>extra_1</Name>') { throw 'STOP extra bone missing after binary roundtrip' }
-          if ($xml -notmatch '<Name>extra_2</Name>') { throw 'FOLLOW extra bone missing after binary roundtrip' }
+          if (Test-Path "$stream\kodiaqcs_hi.yft") { throw 'V4 must not package copied _hi YFT' }
+          if (Test-Path "$stream\kodiaqcs.ytd") { throw 'V4 must not package custom YTD' }
+          $size = (Get-Item "$stream\kodiaqcs.yft").Length
+          if ($size -lt 10000) { throw "YFT unexpectedly small: $size" }
+          foreach ($f in @('handling.meta','carcols.meta','carvariations.meta')) {
+            if (Test-Path "build_output\kodiaq_cs\data\$f") { throw "$f should not be packaged in V4" }
+          }
+          $xml = Get-Content 'build_output\codewalker_roundtrip_v4\kodiaqcs.yft.xml' -Raw
+          if ($xml -notmatch '<Physics>') { throw 'Roundtrip lost Physics' }
+          if ($xml -notmatch '<Skeleton>') { throw 'Roundtrip lost Skeleton' }
+          if ($xml -match '<FileName>default\.sps</FileName>') { throw 'default.sps survived V4 material rebuild' }
+          if ($xml -notmatch '<FileName>vehicle_(paint1|mesh)\.sps</FileName>') { throw 'No GTA vehicle shader found' }
+          $nullSamplers = [regex]::Matches($xml, '<Item name="[^"]*Sampler" type="Texture"\s*/>')
+          if ($nullSamplers.Count -gt 0) { throw "Null texture samplers survived: $($nullSamplers.Count)" }
           $shaderCount = ([regex]::Matches($xml, '<ShaderIndex value=')).Count
-          if ($shaderCount -lt 5) { throw "Too few geometry shader assignments after CodeWalker roundtrip: $shaderCount" }
+          if ($shaderCount -lt 5) { throw "Too few geometry shader assignments: $shaderCount" }
+          Write-Host "V4 VALIDATION PASSED yft=$size shaderAssignments=$shaderCount"
 
       - name: Show build output
         if: always()
@@ -113,12 +115,12 @@ jobs:
       - name: Package FiveM resource
         shell: pwsh
         run: |
-          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_CRASHFIX_V3.zip -Force
+          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_SAFE_SPAWN_V4.zip -Force
 
       - name: Upload build artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kodiaq-cs-crashfix-v3
+          name: kodiaq-cs-safe-spawn-v4
           path: build_output/
           if-no-files-found: warn
