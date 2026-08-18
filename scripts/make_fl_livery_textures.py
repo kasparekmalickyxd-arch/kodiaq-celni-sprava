@@ -1,5 +1,6 @@
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+from texfury import Texture, BCFormat
 
 ROOT = Path.cwd()
 OUT = ROOT / 'build_output' / 'fl_overlay_src'
@@ -21,7 +22,6 @@ def font(size):
     return ImageFont.load_default()
 
 BLUE = (0, 72, 168, 255)
-BLUE2 = (0, 112, 205, 255)
 DARK = (0, 35, 105, 255)
 WHITE = (248, 250, 252, 255)
 CYAN = (45, 180, 235, 255)
@@ -30,16 +30,13 @@ def side_texture():
     w, h = 2048, 512
     im = Image.new('RGBA', (w, h), BLUE)
     d = ImageDraw.Draw(im)
-    # subtle darker top and bottom rails
     d.rectangle((0, 0, w, 34), fill=DARK)
     d.rectangle((0, h-34, w, h), fill=DARK)
-    # diagonal reflective blocks at both ends
     for start in (0, 1620):
         for i in range(6):
             x = start + i * 78
             col = WHITE if i % 2 == 0 else CYAN
             d.polygon([(x, 0), (x+52, 0), (x+146, h), (x+94, h)], fill=col)
-    # central clean field behind lettering
     d.rounded_rectangle((430, 66, 1615, 446), radius=38, fill=(245, 248, 252, 255))
     f = font(142)
     text = 'CELNÍ SPRÁVA'
@@ -53,24 +50,19 @@ def side_texture():
     d.text(((w-(bb[2]-bb[0]))//2, 322), sub, font=f2, fill=(18, 55, 106, 255))
     im.save(OUT / 'cs_side.png')
 
-
 def hood_texture():
     w, h = 1024, 1024
     im = Image.new('RGBA', (w, h), BLUE)
     d = ImageDraw.Draw(im)
-    # white center spear with blue border around it
     d.polygon([(170, 120), (854, 120), (720, 900), (304, 900)], fill=WHITE)
     d.polygon([(245, 180), (779, 180), (680, 820), (344, 820)], fill=(244,247,251,255))
     f = font(96)
-    text = 'CELNÍ\nSPRÁVA'
-    # two centered lines
     y = 330
-    for line in text.split('\n'):
+    for line in ('CELNÍ','SPRÁVA'):
         bb = d.textbbox((0,0), line, font=f)
         d.text(((w-(bb[2]-bb[0]))//2, y), line, font=f, fill=(10, 24, 48, 255))
         y += 125
     im.save(OUT / 'cs_hood.png')
-
 
 def rear_texture():
     w, h = 1024, 256
@@ -87,4 +79,18 @@ def rear_texture():
     im.save(OUT / 'cs_rear.png')
 
 side_texture(); hood_texture(); rear_texture()
-print('FL LIVERY TEXTURES READY', [p.name for p in OUT.glob('*.png')])
+
+# Sollumz native export expects packed embedded textures to already be DDS.
+for png in sorted(OUT.glob('cs_*.png')):
+    tex = Texture.from_image(
+        str(png),
+        format=BCFormat.BC1,
+        quality=0.85,
+        generate_mipmaps=True,
+        min_mip_size=4,
+        resize_to_pot=True,
+        name=png.stem,
+    )
+    tex.save_dds(str(png.with_suffix('.dds')))
+
+print('FL LIVERY TEXTURES READY', [p.name for p in OUT.glob('cs_*')])
