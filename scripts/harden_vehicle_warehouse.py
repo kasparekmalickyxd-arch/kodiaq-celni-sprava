@@ -63,10 +63,12 @@ for name in ('wheel_lf','wheel_rf','wheel_lr','wheel_rr'):
         raise RuntimeError(f'Missing dynamic wheel position {name}')
     add_bone(name,wheel_positions[name],'chassis',0.20)
 
-add_bone('extra_1',(0,-1.92,1.93),'chassis')
-add_bone('extra_2',(0,-1.92,1.93),'chassis')
-add_bone('extra_3',(-0.30,-0.05,1.72),'chassis')
-add_bone('extra_4',(0.30,-0.05,1.72),'chassis')
+# Final placement: message board inside rear-window area and light modules tight
+# to the roof. These coordinates match scripts/final_visual_pass.py.
+add_bone('extra_1',(0,-1.78,1.36),'chassis')
+add_bone('extra_2',(0,-1.78,1.36),'chassis')
+add_bone('extra_3',(-0.30,-0.05,1.615),'chassis')
+add_bone('extra_4',(0.30,-0.05,1.615),'chassis')
 
 bpy.ops.object.mode_set(mode='OBJECT')
 
