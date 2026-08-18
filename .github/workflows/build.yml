@@ -1,11 +1,9 @@
-name: Build FiveM Kodiaq
+name: Build FiveM Kodiaq V5
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, crashfix-v4 ]
-  pull_request:
-    branches: [ main ]
+    branches: [ crashfix-v4 ]
 
 jobs:
   build:
@@ -76,35 +74,40 @@ jobs:
           dotnet run --configuration Release --project tools\CodeWalkerYftCompiler\CodeWalkerYftCompiler.csproj -- `
             build_output\cwxml_final\kodiaqcs.yft.xml `
             build_output\kodiaq_cs\stream\kodiaqcs.yft `
-            build_output\codewalker_roundtrip_v4\kodiaqcs.yft.xml
+            build_output\codewalker_roundtrip_v5\kodiaqcs.yft.xml
 
-      - name: Build stripped safe-spawn resource
+      - name: Build V5 stable feature resource
         shell: pwsh
         run: |
-          python scripts\v4_safe_resource.py
+          python scripts\v5_stable_resource.py
 
-      - name: Validate V4
+      - name: Validate V5
         shell: pwsh
         run: |
           $stream = 'build_output\kodiaq_cs\stream'
+          $data = 'build_output\kodiaq_cs\data'
           if (!(Test-Path "$stream\kodiaqcs.yft")) { throw 'kodiaqcs.yft missing' }
-          if (Test-Path "$stream\kodiaqcs_hi.yft") { throw 'V4 must not package copied _hi YFT' }
-          if (Test-Path "$stream\kodiaqcs.ytd") { throw 'V4 must not package custom YTD' }
+          if (Test-Path "$stream\kodiaqcs_hi.yft") { throw 'V5 must not package copied _hi YFT' }
+          if (Test-Path "$stream\kodiaqcs.ytd") { throw 'V5 must not package custom YTD' }
+          if (!(Test-Path "$data\handling.meta")) { throw 'V5 handling.meta missing' }
+          if (Test-Path "$data\carcols.meta") { throw 'V5 must not package carcols yet' }
+          if (Test-Path "$data\carvariations.meta") { throw 'V5 must not package carvariations yet' }
           $size = (Get-Item "$stream\kodiaqcs.yft").Length
           if ($size -lt 10000) { throw "YFT unexpectedly small: $size" }
-          foreach ($f in @('handling.meta','carcols.meta','carvariations.meta')) {
-            if (Test-Path "build_output\kodiaq_cs\data\$f") { throw "$f should not be packaged in V4" }
-          }
-          $xml = Get-Content 'build_output\codewalker_roundtrip_v4\kodiaqcs.yft.xml' -Raw
+          $xml = Get-Content 'build_output\codewalker_roundtrip_v5\kodiaqcs.yft.xml' -Raw
           if ($xml -notmatch '<Physics>') { throw 'Roundtrip lost Physics' }
           if ($xml -notmatch '<Skeleton>') { throw 'Roundtrip lost Skeleton' }
-          if ($xml -match '<FileName>default\.sps</FileName>') { throw 'default.sps survived V4 material rebuild' }
+          if ($xml -match '<FileName>default\.sps</FileName>') { throw 'default.sps survived material rebuild' }
           if ($xml -notmatch '<FileName>vehicle_(paint1|mesh)\.sps</FileName>') { throw 'No GTA vehicle shader found' }
           $nullSamplers = [regex]::Matches($xml, '<Item name="[^"]*Sampler" type="Texture"\s*/>')
           if ($nullSamplers.Count -gt 0) { throw "Null texture samplers survived: $($nullSamplers.Count)" }
-          $shaderCount = ([regex]::Matches($xml, '<ShaderIndex value=')).Count
-          if ($shaderCount -lt 5) { throw "Too few geometry shader assignments: $shaderCount" }
-          Write-Host "V4 VALIDATION PASSED yft=$size shaderAssignments=$shaderCount"
+          $handling = Get-Content "$data\handling.meta" -Raw
+          if ($handling -notmatch '<handlingName>KODIAQCS</handlingName>') { throw 'KODIAQCS handling entry missing' }
+          $controls = Get-Content 'build_output\kodiaq_cs\client\controls.lua' -Raw
+          foreach ($cmd in @('csstop','csfollow','cssignoff','cslights','csdiag')) {
+            if ($controls -notmatch $cmd) { throw "Missing command $cmd" }
+          }
+          Write-Host "V5 VALIDATION PASSED yft=$size"
 
       - name: Show build output
         if: always()
@@ -115,12 +118,12 @@ jobs:
       - name: Package FiveM resource
         shell: pwsh
         run: |
-          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_SAFE_SPAWN_V4.zip -Force
+          Compress-Archive -Path build_output\kodiaq_cs\* -DestinationPath build_output\KODIAQ_CS_FIVEM_STABLE_FEATURES_V5.zip -Force
 
       - name: Upload build artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kodiaq-cs-safe-spawn-v4
+          name: kodiaq-cs-stable-features-v5
           path: build_output/
           if-no-files-found: warn
