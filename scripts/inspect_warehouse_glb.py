@@ -95,3 +95,4 @@ scene.render.image_settings.file_format='PNG'
 scene.render.filepath=str(OUT/'preview.png')
 bpy.ops.render.render(write_still=True)
 print('WAREHOUSE_PREVIEW_READY', OUT/'preview.png')
+# trigger inspection workflow
