@@ -13,9 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Pillow for livery textures
+      - name: Install livery texture tools
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check pillow
+        run: python -m pip install --disable-pip-version-check pillow texfury
 
       - name: Generate Customs livery textures
         shell: pwsh
